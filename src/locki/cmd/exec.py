@@ -87,6 +87,28 @@ CONTAINER_ENV = {
 logger = logging.getLogger(__name__)
 
 
+def _set_worktree_disk_shift(sandbox: SandboxInfo) -> None:
+    """Make the host-owned worktree writable from the container.
+
+    Lima exposes host files with the host UID/GID.  Without an idmapped Incus
+    disk mount, root in the container can still hit permission errors on those
+    filesystems.  The shifted mount keeps Locki commands running as root while
+    mapping worktree file access to the owning host user.
+    """
+    result = run_in_vm(
+        ["incus", "config", "device", "set", sandbox.wt_id, "worktree", "shift", "true"],
+        "Configuring worktree ownership mapping",
+        check=False,
+        print_success=False,
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "Failed to enable shifted worktree mount for %s: %s",
+            sandbox.wt_id,
+            result.stderr.decode(errors="replace").strip(),
+        )
+
+
 @click.command(
     "exec | x",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True, "allow_interspersed_args": False},
@@ -203,6 +225,7 @@ def exec_cmd(ctx, match, interactive, create, id_file):
         print_success=False,
     )
     if sandbox.wt_id in result.stdout.decode():
+        _set_worktree_disk_shift(sandbox)
         run_in_vm(
             ["incus", "start", sandbox.wt_id],
             "Starting container",
@@ -259,6 +282,7 @@ def exec_cmd(ctx, match, interactive, create, id_file):
                 "disk",
                 f"source={sandbox.wt_path}",
                 f"path={sandbox.wt_path}",
+                "shift=true",
             ],
             "Mounting worktree into container",
             print_success=False,
